@@ -1,7 +1,7 @@
 {
-  "name": "qg-ofertas-baileys",
+  "name": "baileys-qg",
   "version": "1.0.0",
-  "description": "Bot de Ofertas usando Baileys",
+  "description": "Bot de Ofertas Baileys",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
