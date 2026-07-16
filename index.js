@@ -3,6 +3,7 @@ const express = require('express');
 const qrcode = require('qrcode-terminal');
 const axios = require('axios');
 const { URL } = require('url'); 
+const { getLinkPreview } = require('link-preview-js'); 
 const app = express();
 
 app.use(express.json());
@@ -54,13 +55,24 @@ function extrairLink(texto) {
     return urls ? urls[0] : null;
 }
 
-// Função para garantir que o link meli.la tenha o seu rastreio de afiliado embutido corretamente
-function adicionarAfiliadoMeliLa(urlOriginal, affId) {
+async function desembrulharLink(urlCurta) {
+    try {
+        const resposta = await axios.head(urlCurta, { maxRedirects: 5, timeout: 10000 });
+        return resposta.request.res.responseUrl || urlCurta;
+    } catch (e) {
+        try {
+            const respostaGet = await axios.get(urlCurta, { maxRedirects: 5, timeout: 10000 });
+            return respostaGet.request.res.responseUrl || urlCurta;
+        } catch (erroGet) {
+            return urlCurta;
+        }
+    }
+}
+
+function limparUrlML(urlOriginal) {
     try {
         const urlObj = new URL(urlOriginal);
-        // Adiciona o custom_id do afiliado para garantir a sua comissão sem esticar o link visualmente
-        urlObj.searchParams.set('custom_id', affId);
-        return urlObj.toString();
+        return `${urlObj.protocol}//${urlObj.host}${urlObj.pathname}`;
     } catch (e) {
         return urlOriginal;
     }
@@ -81,21 +93,51 @@ app.post('/telegram-webhook', async (req, res) => {
         if (linkCurto) {
             console.log(`Link encontrado: ${linkCurto}. Processando...`);
             
-            // Adiciona o ID de afiliado de forma limpa na URL curta
-            const linkFinalAfiliado = adicionarAfiliadoMeliLa(linkCurto, MERCADO_LIVRE_AFF_ID);
+            // Descobre o link real para capturar a foto e o título limpo
+            const linkReal = await desembrulharLink(linkCurto);
+            const linkLimpo = limparUrlML(linkReal);
+            
+            let imagemProduto = null;
+            let tituloProduto = "Oferta imperdível no Mercado Livre!";
+            
+            try {
+                const preview = await getLinkPreview(linkLimpo, {
+                    headers: {
+                        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    },
+                    timeout: 5000
+                });
+                
+                if (preview && preview.images && preview.images.length > 0) {
+                    imagemProduto = preview.images[0];
+                }
+                if (preview && preview.title) {
+                    tituloProduto = preview.title.replace(" | Mercado Livre", "").trim();
+                }
+            } catch (erroPreview) {
+                console.log("Erro ao buscar dados do produto:", erroPreview.message);
+            }
 
-            // Mensagem estruturada exatamente como o modelo da foto que você deseja
+            // Mensagem elegante estruturada para o grupo de ofertas
             const mensagemFinal = 
                 `⚡ *ALERTA NO QG DAS OFERTAS!* ⚡\n\n` +
-                `🛍️ *Oferta imperdível no Mercado Livre!*\n\n` +
-                `👉 ${linkFinalAfiliado}\n\n` +
+                `🛍️ *${tituloProduto}*\n\n` +
+                `👉 ${linkCurto}\n\n` +
                 `⚠️ *Atenção:* Estoques promocionais do Mercado Livre costumam acabar em minutos!`;
 
             if (sock && sock.user) {
                 try {
-                    // Enviamos apenas como texto. Como o link é "meli.la", o WhatsApp vai gerar o card rico sozinho!
-                    await sock.sendMessage(WHATSAPP_GROUP_ID, { text: mensagemFinal });
-                    console.log("Mensagem com link meli.la enviada com sucesso!");
+                    if (imagemProduto) {
+                        // Envia a foto real em alta resolução com a legenda contendo o link meli.la limpo
+                        await sock.sendMessage(WHATSAPP_GROUP_ID, { 
+                            image: { url: imagemProduto }, 
+                            caption: mensagemFinal 
+                        });
+                        console.log("Mensagem com imagem e link meli.la enviada com sucesso!");
+                    } else {
+                        await sock.sendMessage(WHATSAPP_GROUP_ID, { text: mensagemFinal });
+                        console.log("Mensagem de texto enviada.");
+                    }
                 } catch (erroEnvio) {
                     console.log("Erro ao enviar mensagem pelo Baileys:", erroEnvio);
                 }
