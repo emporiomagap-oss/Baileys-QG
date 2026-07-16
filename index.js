@@ -8,21 +8,17 @@ const app = express();
 
 app.use(express.json());
 
-// Variáveis de ambiente configuradas no Render
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const WHATSAPP_GROUP_ID = process.env.WHATSAPP_GROUP_ID; // ID do grupo (ex: 120363xxxxxxxxx@g.us)
+const WHATSAPP_GROUP_ID = process.env.WHATSAPP_GROUP_ID; 
 const MERCADO_LIVRE_AFF_ID = process.env.MERCADO_LIVRE_AFF_ID; 
 
-let sock; // Variável global para armazenar a conexão do WhatsApp
-let qrCodeAtual = null; // Guarda o último QR Code gerado para exibir na web
+let sock; 
+let qrCodeAtual = null; 
 
-// Função para iniciar e manter a conexão do WhatsApp
 async function conectarAoWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-
     const { version, isLatest } = await fetchLatestBaileysVersion();
-    console.log(`Usando a versão do WhatsApp Web: ${version.join('.')}, última versão disponível: ${isLatest}`);
-
+    
     sock = makeWASocket({
         version,
         auth: state,
@@ -36,16 +32,12 @@ async function conectarAoWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
         
         if (qr) {
-            console.log("==================================================");
-            console.log(" ESCANEIE O QR CODE NA PÁGINA DA WEB DO SEU BOT!  ");
-            console.log("==================================================");
             qrCodeAtual = qr;
             qrcode.generate(qr, { small: true });
         }
 
         if (connection === 'close') {
             const deveriaReconectar = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Conexão fechada devido a:', lastDisconnect?.error, '. Reconectando:', deveriaReconectar);
             if (deveriaReconectar) {
                 setTimeout(() => conectarAoWhatsApp(), 5000);
             }
@@ -56,16 +48,13 @@ async function conectarAoWhatsApp() {
     });
 }
 
-// Inicializa o WhatsApp
 conectarAoWhatsApp();
 
-// Função para extrair a URL da mensagem
 function extrairLink(texto) {
     const urls = texto.match(/(https?:\/\/[^\s]+)/g);
     return urls ? urls[0] : null;
 }
 
-// Função de desembrulhar link com plano B (GET) para links "meli.la"
 async function desembrulharLink(urlCurta) {
     try {
         const resposta = await axios.head(urlCurta, { maxRedirects: 5, timeout: 10000 });
@@ -75,13 +64,11 @@ async function desembrulharLink(urlCurta) {
             const respostaGet = await axios.get(urlCurta, { maxRedirects: 5, timeout: 10000 });
             return respostaGet.request.res.responseUrl || urlCurta;
         } catch (erroGet) {
-            console.log(`Erro ao desembrulhar link ${urlCurta}:`, erroGet.message);
             return urlCurta;
         }
     }
 }
 
-// Função para limpar rastreamentos antigos da URL do Mercado Livre
 function limparUrlML(urlOriginal) {
     try {
         const urlObj = new URL(urlOriginal);
@@ -91,7 +78,6 @@ function limparUrlML(urlOriginal) {
     }
 }
 
-// Endpoint do Webhook do Telegram
 app.post('/telegram-webhook', async (req, res) => {
     const dados = req.body;
     const mensagemObjeto = dados.channel_post || dados.message;
@@ -113,7 +99,7 @@ app.post('/telegram-webhook', async (req, res) => {
             
             const linkAfiliado = `https://www.mercadolivre.com.br/social/afiliados/c/share?s=${linkCodificado}&custom_id=${MERCADO_LIVRE_AFF_ID}`;
 
-            // Tenta buscar o título do produto para enfeitar o texto
+            let imagemProduto = null;
             let tituloProduto = "Oferta imperdível no Mercado Livre!";
             
             try {
@@ -124,14 +110,17 @@ app.post('/telegram-webhook', async (req, res) => {
                     timeout: 5000
                 });
                 
+                if (preview && preview.images && preview.images.length > 0) {
+                    imagemProduto = preview.images[0];
+                }
                 if (preview && preview.title) {
                     tituloProduto = preview.title.replace(" | Mercado Livre", "").trim();
                 }
             } catch (erroPreview) {
-                console.log("Não foi possível buscar o título do produto:", erroPreview.message);
+                console.log("Erro ao buscar dados do produto:", erroPreview.message);
             }
 
-            // Formato limpo para forçar o WhatsApp a gerar o Card de Preview do Link automaticamente
+            // Mensagem formatada perfeitamente como legenda da foto
             const mensagemFinal = 
                 `⚡ *ALERTA NO QG DAS OFERTAS!* ⚡\n\n` +
                 `🛍️ *${tituloProduto}*\n\n` +
@@ -140,13 +129,20 @@ app.post('/telegram-webhook', async (req, res) => {
 
             if (sock && sock.user) {
                 try {
-                    await sock.sendMessage(WHATSAPP_GROUP_ID, { text: mensagemFinal });
-                    console.log("Mensagem com preview automático enviada com sucesso!");
+                    if (imagemProduto) {
+                        // Envia a imagem grande do produto com a legenda embaixo
+                        await sock.sendMessage(WHATSAPP_GROUP_ID, { 
+                            image: { url: imagemProduto }, 
+                            caption: mensagemFinal 
+                        });
+                        console.log("Mensagem com imagem enviada com sucesso!");
+                    } else {
+                        await sock.sendMessage(WHATSAPP_GROUP_ID, { text: mensagemFinal });
+                        console.log("Mensagem de texto enviada (sem imagem encontrada).");
+                    }
                 } catch (erroEnvio) {
                     console.log("Erro ao enviar mensagem pelo Baileys:", erroEnvio);
                 }
-            } else {
-                console.log("Erro: O bot do WhatsApp não está conectado no momento.");
             }
         }
     }
@@ -154,7 +150,6 @@ app.post('/telegram-webhook', async (req, res) => {
     return res.status(200).json({ status: 'sucesso' });
 });
 
-// Rota de teste, ping e exibição visual do QR Code
 app.get('/', (req, res) => {
     if (sock && sock.user) {
         res.send("<h1>🎉 Bot Baileys QG das Ofertas está ativo e conectado!</h1>");
@@ -163,8 +158,6 @@ app.get('/', (req, res) => {
             <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif;">
                 <h2>Escaneie o QR Code abaixo com seu WhatsApp:</h2>
                 <div id="qrcode" style="border: 10px solid white; padding: 10px; background: white;"></div>
-                <p style="margin-top: 20px; color: #555;">Atualize a página se o código expirar.</p>
-                
                 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
                 <script>
                     new QRCode(document.getElementById("qrcode"), "${qrCodeAtual}");
@@ -172,7 +165,7 @@ app.get('/', (req, res) => {
             </div>
         `);
     } else {
-        res.send("<h1>Carregando o bot... Por favor, aguarde e atualize a página em instantes.</h1>");
+        res.send("<h1>Carregando o bot... Aguarde um instante.</h1>");
     }
 });
 
