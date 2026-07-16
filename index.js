@@ -3,6 +3,7 @@ const express = require('express');
 const qrcode = require('qrcode-terminal');
 const axios = require('axios');
 const { URL } = require('url'); // 🛠️ ADICIONADO: Necessário para limpar a URL de forma segura
+const { getLinkPreview } = require('link-preview-js'); // 🔍 ADICIONADO: Para buscar imagem e título do produto
 const app = express();
 
 app.use(express.json());
@@ -120,18 +121,49 @@ app.post('/telegram-webhook', async (req, res) => {
             // 🛠️ ALTERADO: Formato de redirecionamento oficial do Mercado Livre
             const linkAfiliado = `https://www.mercadolivre.com.br/social/afiliados/c/share?s=${linkCodificado}&custom_id=${MERCADO_LIVRE_AFF_ID}`;
 
-            // 🛠️ ALTERADO: Copy adaptada para o Mercado Livre (com emoji de caixa 📦)
+            // 🔍 Tenta buscar a imagem e o título do produto usando link-preview-js
+            let imagemProduto = null;
+            let tituloProduto = "Oferta imperdível no Mercado Livre!";
+            
+            try {
+                const preview = await getLinkPreview(linkLimpo, {
+                    headers: {
+                        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    },
+                    timeout: 5000
+                });
+                
+                if (preview && preview.images && preview.images.length > 0) {
+                    imagemProduto = preview.images[0];
+                }
+                if (preview && preview.title) {
+                    tituloProduto = preview.title.replace(" | Mercado Livre", "").trim();
+                }
+            } catch (erroPreview) {
+                console.log("Não foi possível buscar os dados visuais do produto:", erroPreview.message);
+            }
+
+            // 🛠️ ALTERADO: Nova copy igual ao modelo enviado
             const mensagemFinal = 
                 `⚡ *ALERTA NO QG DAS OFERTAS!* ⚡\n\n` +
-                `📦 Oferta imperdível no Mercado Livre! Aproveite o frete rápido clicando abaixo:\n\n` +
-                `👉 ${linkAfiliado}\n\n` +
+                `🛍️ *${tituloProduto}*\n\n` +
+                `👉 *Acesse aqui:* ${linkAfiliado}\n\n` +
                 `⚠️ *Atenção:* Estoques promocionais do Mercado Livre costumam acabar em minutos!`;
 
             if (sock && sock.user) {
                 try {
-                    // Envia diretamente pelo robô, sem Z-API!
-                    await sock.sendMessage(WHATSAPP_GROUP_ID, { text: mensagemFinal });
-                    console.log("Mensagem enviada com sucesso para o WhatsApp!");
+                    if (imagemProduto) {
+                        // Envia a Imagem com o texto como legenda
+                        await sock.sendMessage(WHATSAPP_GROUP_ID, { 
+                            image: { url: imagemProduto }, 
+                            caption: mensagemFinal 
+                        });
+                        console.log("Mensagem com imagem enviada com sucesso!");
+                    } else {
+                        // Plano B: Envia apenas o texto caso não consiga baixar a imagem
+                        await sock.sendMessage(WHATSAPP_GROUP_ID, { text: mensagemFinal });
+                        console.log("Mensagem de texto simples enviada com sucesso (sem imagem)!");
+                    }
                 } catch (erroEnvio) {
                     console.log("Erro ao enviar mensagem pelo Baileys:", erroEnvio);
                 }
@@ -163,7 +195,7 @@ app.get('/', (req, res) => {
             </div>
         `);
     } else {
-        res.send("<h1>Carregando o bot... Por favor, aguarde e atualize a página em instantes.</h1>");
+        res.send("<h1>Carregando o bot... Por favor, aguarde e atualize a página in instantes.</h1>");
     }
 });
 
