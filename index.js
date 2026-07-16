@@ -2,6 +2,7 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = requi
 const express = require('express');
 const qrcode = require('qrcode-terminal');
 const axios = require('axios');
+const { URL } = require('url'); // 🛠️ ADICIONADO: Necessário para limpar a URL de forma segura
 const app = express();
 
 app.use(express.json());
@@ -9,7 +10,7 @@ app.use(express.json());
 // Variáveis de ambiente configuradas no Render
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const WHATSAPP_GROUP_ID = process.env.WHATSAPP_GROUP_ID; // ID do grupo (ex: 120363xxxxxxxxx@g.us)
-const SHOPEE_SUB_ID = process.env.SHOPEE_SUB_ID; // ID de afiliada Shopee
+const MERCADO_LIVRE_AFF_ID = process.env.MERCADO_LIVRE_AFF_ID; // 🛠️ ALTERADO: Agora usa seu ID do Mercado Livre
 
 let sock; // Variável global para armazenar a conexão do WhatsApp
 
@@ -56,14 +57,32 @@ function extrairLink(texto) {
     return urls ? urls[0] : null;
 }
 
-// Função para descobrir a URL real por trás do link curto
+// 🛠️ ALTERADO: Função de desembrulhar agora possui plano B (GET) para links "meli.la"
 async function desembrulharLink(urlCurta) {
     try {
+        // Tenta primeiro com o método HEAD por ser mais rápido
         const resposta = await axios.head(urlCurta, { maxRedirects: 5, timeout: 10000 });
         return resposta.request.res.responseUrl || urlCurta;
     } catch (e) {
-        console.log(`Erro ao desembrulhar link ${urlCurta}:`, e.message);
-        return urlCurta;
+        try {
+            // Se falhar (comum no meli.la), tenta um GET tradicional para abrir o link
+            const respostaGet = await axios.get(urlCurta, { maxRedirects: 5, timeout: 10000 });
+            return respostaGet.request.res.responseUrl || urlCurta;
+        } catch (erroGet) {
+            console.log(`Erro ao desembrulhar link ${urlCurta}:`, erroGet.message);
+            return urlCurta;
+        }
+    }
+}
+
+// 🛠️ ADICIONADO: Função para limpar rastreamentos antigos da URL do Mercado Livre
+function limparUrlML(urlOriginal) {
+    try {
+        const urlObj = new URL(urlOriginal);
+        // Retorna apenas protocolo, host e o caminho (path), removendo UTMs e IDs de outros afiliados
+        return `${urlObj.protocol}//${urlObj.host}${urlObj.pathname}`;
+    } catch (e) {
+        return urlOriginal;
     }
 }
 
@@ -78,21 +97,25 @@ app.post('/telegram-webhook', async (req, res) => {
 
     const texto = mensagemObjeto.text || "";
 
-    // Filtro: monitora apenas links da Shopee
-    if (texto.includes("shope.ee") || texto.includes("shopee.com.br")) {
+    // 🛠️ ALTERADO: Filtro agora monitora links do Mercado Livre, incluindo o meli.la
+    if (texto.includes("mercadolivre.com") || texto.includes("mlb.io") || texto.includes("mercadolivre.com.br") || texto.includes("meli.la")) {
         const linkCurto = extrairLink(texto);
         if (linkCurto) {
             console.log(`Link encontrado: ${linkCurto}. Processando...`);
             
             const linkReal = await desembrulharLink(linkCurto);
-            const linkCodificado = encodeURIComponent(linkReal);
-            const linkAfiliado = `https://shopee.com.br/universal-link/${linkCodificado}?utm_campaign=-&utm_content=${SHOPEE_SUB_ID}`;
+            const linkLimpo = limparUrlML(linkReal); // 🛠️ ADICIONADO: Limpa a URL antes de gerar seu link de afiliado
+            const linkCodificado = encodeURIComponent(linkLimpo);
+            
+            // 🛠️ ALTERADO: Formato de redirecionamento oficial do Mercado Livre
+            const linkAfiliado = `https://www.mercadolivre.com.br/social/afiliados/c/share?s=${linkCodificado}&custom_id=${MERCADO_LIVRE_AFF_ID}`;
 
+            // 🛠️ ALTERADO: Copy adaptada para o Mercado Livre (com emoji de caixa 📦)
             const mensagemFinal = 
                 `⚡ *ALERTA NO QG DAS OFERTAS!* ⚡\n\n` +
-                `🛍️ Encontramos um super desconto! Garanta o seu clicando no link abaixo:\n\n` +
+                `📦 Oferta imperdível no Mercado Livre! Aproveite o frete rápido clicando abaixo:\n\n` +
                 `👉 ${linkAfiliado}\n\n` +
-                `⚠️ *Atenção:* Os estoques promocionais costumam esgotar rápido!`;
+                `⚠️ *Atenção:* Estoques promocionais do Mercado Livre costumam acabar em minutos!`;
 
             if (sock && sock.user) {
                 try {
@@ -113,7 +136,7 @@ app.post('/telegram-webhook', async (req, res) => {
 
 // Rota de teste e ping para manter o bot acordado
 app.get('/', (req, res) => {
-    res.send("Bot Baileys QG das Ofertas está ativo!");
+    res.send("Bot Baileys QG das Ofertas (Mercado Livre) está ativo!");
 });
 
 const porta = process.env.PORT || 3000;
