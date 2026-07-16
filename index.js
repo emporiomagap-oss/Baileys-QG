@@ -78,6 +78,16 @@ function limparUrlML(urlOriginal) {
     }
 }
 
+// Função para encurtar o link usando um serviço gratuito (TinyURL) para ficar limpo igual ao modelo
+async function encurtarLink(urlLonga) {
+    try {
+        const resposta = await axios.get(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(urlLonga)}`);
+        return resposta.data || urlLonga;
+    } catch (e) {
+        return urlLonga;
+    }
+}
+
 app.post('/telegram-webhook', async (req, res) => {
     const dados = req.body;
     const mensagemObjeto = dados.channel_post || dados.message;
@@ -97,7 +107,11 @@ app.post('/telegram-webhook', async (req, res) => {
             const linkLimpo = limparUrlML(linkReal);
             const linkCodificado = encodeURIComponent(linkLimpo);
             
-            const linkAfiliado = `https://www.mercadolivre.com.br/social/afiliados/c/share?s=${linkCodificado}&custom_id=${MERCADO_LIVRE_AFF_ID}`;
+            // Cria o link de afiliado oficial
+            const linkAfiliadoLongo = `https://www.mercadolivre.com.br/social/afiliados/c/share?s=${linkCodificado}&custom_id=${MERCADO_LIVRE_AFF_ID}`;
+            
+            // Encurta o link de afiliado para ficar limpinho igual ao modelo (ex: tinyurl ou similar)
+            const linkAfiliadoCurto = await encurtarLink(linkAfiliadoLevel = linkAfiliadoLongo);
 
             let imagemProduto = null;
             let tituloProduto = "Oferta imperdível no Mercado Livre!";
@@ -120,25 +134,24 @@ app.post('/telegram-webhook', async (req, res) => {
                 console.log("Erro ao buscar dados do produto:", erroPreview.message);
             }
 
-            // Mensagem formatada perfeitamente como legenda da foto
+            // Mensagem formatada exatamente como o modelo que você mandou
             const mensagemFinal = 
                 `⚡ *ALERTA NO QG DAS OFERTAS!* ⚡\n\n` +
                 `🛍️ *${tituloProduto}*\n\n` +
-                `👉 ${linkAfiliado}\n\n` +
+                `👉 ${linkAfiliadoCurto}\n\n` +
                 `⚠️ *Atenção:* Estoques promocionais do Mercado Livre costumam acabar em minutos!`;
 
             if (sock && sock.user) {
                 try {
                     if (imagemProduto) {
-                        // Envia a imagem grande do produto com a legenda embaixo
                         await sock.sendMessage(WHATSAPP_GROUP_ID, { 
                             image: { url: imagemProduto }, 
                             caption: mensagemFinal 
                         });
-                        console.log("Mensagem com imagem enviada com sucesso!");
+                        console.log("Mensagem com imagem e link curto enviada com sucesso!");
                     } else {
                         await sock.sendMessage(WHATSAPP_GROUP_ID, { text: mensagemFinal });
-                        console.log("Mensagem de texto enviada (sem imagem encontrada).");
+                        console.log("Mensagem de texto enviada.");
                     }
                 } catch (erroEnvio) {
                     console.log("Erro ao enviar mensagem pelo Baileys:", erroEnvio);
