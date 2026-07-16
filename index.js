@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const express = require('express');
 const qrcode = require('qrcode-terminal');
 const axios = require('axios');
@@ -19,9 +19,15 @@ async function conectarAoWhatsApp() {
     // Salva a sessão na pasta 'auth_info' para não perder a conexão ao reiniciar rápido
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
+    // Busca de forma dinâmica a versão mais recente do WhatsApp Web aceita pelo servidor
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    console.log(`Usando a versão do WhatsApp Web: ${version.join('.')}, última versão disponível: ${isLatest}`);
+
     sock = makeWASocket({
+        version,
         auth: state,
-        printQRInTerminal: false // Vamos nós mesmos tratar e printar o QR no log de forma limpa
+        printQRInTerminal: false, // Vamos nós mesmos tratar e printar o QR no log de forma limpa
+        browser: ['Ubuntu', 'Chrome', '20.0.04'] // Identificação essencial para evitar o erro 405
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -40,7 +46,8 @@ async function conectarAoWhatsApp() {
             const deveriaReconectar = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('Conexão fechada devido a:', lastDisconnect?.error, '. Reconectando:', deveriaReconectar);
             if (deveriaReconectar) {
-                conectarAoWhatsApp();
+                // Pequeno atraso para evitar spam de reconexão rápida em caso de erro continuado
+                setTimeout(() => conectarAoWhatsApp(), 5000);
             }
         } else if (connection === 'open') {
             console.log('🎉 WHATSAPP CONECTADO COM SUCESSO!');
