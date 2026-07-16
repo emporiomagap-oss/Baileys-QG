@@ -3,7 +3,6 @@ const express = require('express');
 const qrcode = require('qrcode-terminal');
 const axios = require('axios');
 const { URL } = require('url'); 
-const { getLinkPreview } = require('link-preview-js'); 
 const app = express();
 
 app.use(express.json());
@@ -55,36 +54,15 @@ function extrairLink(texto) {
     return urls ? urls[0] : null;
 }
 
-async function desembrulharLink(urlCurta) {
-    try {
-        const resposta = await axios.head(urlCurta, { maxRedirects: 5, timeout: 10000 });
-        return resposta.request.res.responseUrl || urlCurta;
-    } catch (e) {
-        try {
-            const respostaGet = await axios.get(urlCurta, { maxRedirects: 5, timeout: 10000 });
-            return respostaGet.request.res.responseUrl || urlCurta;
-        } catch (erroGet) {
-            return urlCurta;
-        }
-    }
-}
-
-function limparUrlML(urlOriginal) {
+// Função para garantir que o link meli.la tenha o seu rastreio de afiliado embutido corretamente
+function adicionarAfiliadoMeliLa(urlOriginal, affId) {
     try {
         const urlObj = new URL(urlOriginal);
-        return `${urlObj.protocol}//${urlObj.host}${urlObj.pathname}`;
+        // Adiciona o custom_id do afiliado para garantir a sua comissão sem esticar o link visualmente
+        urlObj.searchParams.set('custom_id', affId);
+        return urlObj.toString();
     } catch (e) {
         return urlOriginal;
-    }
-}
-
-// Função para encurtar o link usando um serviço gratuito (TinyURL) para ficar limpo igual ao modelo
-async function encurtarLink(urlLonga) {
-    try {
-        const resposta = await axios.get(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(urlLonga)}`);
-        return resposta.data || urlLonga;
-    } catch (e) {
-        return urlLonga;
     }
 }
 
@@ -103,56 +81,21 @@ app.post('/telegram-webhook', async (req, res) => {
         if (linkCurto) {
             console.log(`Link encontrado: ${linkCurto}. Processando...`);
             
-            const linkReal = await desembrulharLink(linkCurto);
-            const linkLimpo = limparUrlML(linkReal);
-            const linkCodificado = encodeURIComponent(linkLimpo);
-            
-            // Cria o link de afiliado oficial
-            const linkAfiliadoLongo = `https://www.mercadolivre.com.br/social/afiliados/c/share?s=${linkCodificado}&custom_id=${MERCADO_LIVRE_AFF_ID}`;
-            
-            // Encurta o link de afiliado para ficar limpinho igual ao modelo (ex: tinyurl ou similar)
-            const linkAfiliadoCurto = await encurtarLink(linkAfiliadoLevel = linkAfiliadoLongo);
+            // Adiciona o ID de afiliado de forma limpa na URL curta
+            const linkFinalAfiliado = adicionarAfiliadoMeliLa(linkCurto, MERCADO_LIVRE_AFF_ID);
 
-            let imagemProduto = null;
-            let tituloProduto = "Oferta imperdível no Mercado Livre!";
-            
-            try {
-                const preview = await getLinkPreview(linkLimpo, {
-                    headers: {
-                        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                    },
-                    timeout: 5000
-                });
-                
-                if (preview && preview.images && preview.images.length > 0) {
-                    imagemProduto = preview.images[0];
-                }
-                if (preview && preview.title) {
-                    tituloProduto = preview.title.replace(" | Mercado Livre", "").trim();
-                }
-            } catch (erroPreview) {
-                console.log("Erro ao buscar dados do produto:", erroPreview.message);
-            }
-
-            // Mensagem formatada exatamente como o modelo que você mandou
+            // Mensagem estruturada exatamente como o modelo da foto que você deseja
             const mensagemFinal = 
                 `⚡ *ALERTA NO QG DAS OFERTAS!* ⚡\n\n` +
-                `🛍️ *${tituloProduto}*\n\n` +
-                `👉 ${linkAfiliadoCurto}\n\n` +
+                `🛍️ *Oferta imperdível no Mercado Livre!*\n\n` +
+                `👉 ${linkFinalAfiliado}\n\n` +
                 `⚠️ *Atenção:* Estoques promocionais do Mercado Livre costumam acabar em minutos!`;
 
             if (sock && sock.user) {
                 try {
-                    if (imagemProduto) {
-                        await sock.sendMessage(WHATSAPP_GROUP_ID, { 
-                            image: { url: imagemProduto }, 
-                            caption: mensagemFinal 
-                        });
-                        console.log("Mensagem com imagem e link curto enviada com sucesso!");
-                    } else {
-                        await sock.sendMessage(WHATSAPP_GROUP_ID, { text: mensagemFinal });
-                        console.log("Mensagem de texto enviada.");
-                    }
+                    // Enviamos apenas como texto. Como o link é "meli.la", o WhatsApp vai gerar o card rico sozinho!
+                    await sock.sendMessage(WHATSAPP_GROUP_ID, { text: mensagemFinal });
+                    console.log("Mensagem com link meli.la enviada com sucesso!");
                 } catch (erroEnvio) {
                     console.log("Erro ao enviar mensagem pelo Baileys:", erroEnvio);
                 }
