@@ -51,6 +51,22 @@ async function conectarAoWhatsApp() {
             }
         } else if (connection === 'open') {
             console.log('🎉 WHATSAPP CONECTADO COM SUCESSO!');
+
+            // 🔍 CÓDIGO TEMPORÁRIO: Lista todos os grupos e IDs no terminal após 5 segundos
+            setTimeout(async () => {
+                try {
+                    console.log("==================================================");
+                    console.log("      🔍 BUSCANDO SEUS GRUPOS DO WHATSAPP:       ");
+                    console.log("==================================================");
+                    const listagem = await sock.groupFetchAllParticipating();
+                    for (const id in listagem) {
+                        console.log(`Grupo: "${listagem[id].subject}" | ID: ${id}`);
+                    }
+                    console.log("==================================================");
+                } catch (erroGrupos) {
+                    console.log("Erro ao carregar a lista de grupos:", erroGrupos);
+                }
+            }, 5000);
         }
     });
 }
