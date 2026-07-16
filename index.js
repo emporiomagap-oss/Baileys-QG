@@ -13,6 +13,7 @@ const WHATSAPP_GROUP_ID = process.env.WHATSAPP_GROUP_ID; // ID do grupo (ex: 120
 const MERCADO_LIVRE_AFF_ID = process.env.MERCADO_LIVRE_AFF_ID; // 🛠️ ALTERADO: Agora usa seu ID do Mercado Livre
 
 let sock; // Variável global para armazenar a conexão do WhatsApp
+let qrCodeAtual = null; // 🔍 Guarda o último QR Code gerado para exibir na web
 
 // Função para iniciar e manter a conexão do WhatsApp
 async function conectarAoWhatsApp() {
@@ -37,8 +38,9 @@ async function conectarAoWhatsApp() {
         
         if (qr) {
             console.log("==================================================");
-            console.log(" ESCANEIE O QR CODE ABAIXO COM O SEU WHATSAPP: ");
+            console.log(" ESCANEIE O QR CODE NA PÁGINA DA WEB DO SEU BOT!  ");
             console.log("==================================================");
+            qrCodeAtual = qr; // Salva o QR Code na variável
             qrcode.generate(qr, { small: true });
         }
 
@@ -51,22 +53,7 @@ async function conectarAoWhatsApp() {
             }
         } else if (connection === 'open') {
             console.log('🎉 WHATSAPP CONECTADO COM SUCESSO!');
-
-            // 🔍 CÓDIGO TEMPORÁRIO: Lista todos os grupos e IDs no terminal após 5 segundos
-            setTimeout(async () => {
-                try {
-                    console.log("==================================================");
-                    console.log("      🔍 BUSCANDO SEUS GRUPOS DO WHATSAPP:       ");
-                    console.log("==================================================");
-                    const listagem = await sock.groupFetchAllParticipating();
-                    for (const id in listagem) {
-                        console.log(`Grupo: "${listagem[id].subject}" | ID: ${id}`);
-                    }
-                    console.log("==================================================");
-                } catch (erroGrupos) {
-                    console.log("Erro ao carregar a lista de grupos:", erroGrupos);
-                }
-            }, 5000);
+            qrCodeAtual = null; // Limpa o QR Code gerado já que está conectado
         }
     });
 }
@@ -157,9 +144,27 @@ app.post('/telegram-webhook', async (req, res) => {
     return res.status(200).json({ status: 'sucesso' });
 });
 
-// Rota de teste e ping para manter o bot acordado
+// Rota de teste, ping e exibição visual do QR Code
 app.get('/', (req, res) => {
-    res.send("Bot Baileys QG das Ofertas (Mercado Livre) está ativo!");
+    if (sock && sock.user) {
+        res.send("<h1>🎉 Bot Baileys QG das Ofertas está ativo e conectado!</h1>");
+    } else if (qrCodeAtual) {
+        // Gera uma página simples com o QR Code para ser escaneado facilmente
+        res.send(`
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif;">
+                <h2>Escaneie o QR Code abaixo com seu WhatsApp:</h2>
+                <div id="qrcode" style="border: 10px solid white; padding: 10px; background: white;"></div>
+                <p style="margin-top: 20px; color: #555;">Atualize a página se o código expirar.</p>
+                
+                <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+                <script>
+                    new QRCode(document.getElementById("qrcode"), "${qrCodeAtual}");
+                </script>
+            </div>
+        `);
+    } else {
+        res.send("<h1>Carregando o bot... Por favor, aguarde e atualize a página em instantes.</h1>");
+    }
 });
 
 const porta = process.env.PORT || 3000;
