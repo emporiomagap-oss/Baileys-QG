@@ -73,7 +73,7 @@ app.get('/qr', async (req, res) => {
     res.send(`<div style="text-align:center;padding:40px"><h2>Escaneie com o WhatsApp:</h2><img src="${imagemQR}" /></div>`);
 });
 
-// --------- Extração do link e busca de dados do produto ---------
+// --------- Extração do link e busca de dados do produto (JSON-LD + Fallback) ---------
 
 function extrairLinkML(texto) {
     const urls = texto.match(/https?:\/\/[^\s]+/g) || [];
@@ -101,18 +101,60 @@ async function buscarDadosProduto(linkAfiliado) {
 
         const $ = cheerio.load(resposta.data);
 
+        // 1. Extração via dados estruturados (JSON-LD)
+        let jsonLdData = null;
+        $('script[type="application/ld+json"]').each((_, element) => {
+            try {
+                const parsed = JSON.parse($(element).html());
+                const produtoSchema = Array.isArray(parsed) 
+                    ? parsed.find(item => item['@type'] === 'Product') 
+                    : (parsed['@type'] === 'Product' ? parsed : null);
+
+                if (produtoSchema) {
+                    jsonLdData = produtoSchema;
+                }
+            } catch (err) {
+                // Ignora JSONs mal formados
+            }
+        });
+
         // Título
-        dados.titulo = $('meta[property="og:title"]').attr('content')
-            || $('title').text()
-            || null;
-        if (dados.titulo) {
-            dados.titulo = dados.titulo.replace(/\s*\|\s*Mercado Livre.*/i, '').trim();
+        if (jsonLdData && jsonLdData.name) {
+            dados.titulo = jsonLdData.name;
+        } else {
+            dados.titulo = $('meta[property="og:title"]').attr('content') || $('title').text() || null;
+            if (dados.titulo) {
+                dados.titulo = dados.titulo.replace(/\s*\|\s*Mercado Livre.*/i, '').trim();
+            }
         }
 
         // Imagem
-        dados.imagem = $('meta[property="og:image"]').attr('content') || null;
+        if (jsonLdData && jsonLdData.image) {
+            dados.imagem = Array.isArray(jsonLdData.image) ? jsonLdData.image[0] : jsonLdData.image;
+        } else {
+            dados.imagem = $('meta[property="og:image"]').attr('content') || null;
+        }
 
-        // Porcentagem de desconto (ex: "6% OFF")
+        // Preço Atual
+        if (jsonLdData && jsonLdData.offers) {
+            const offer = Array.isArray(jsonLdData.offers) ? jsonLdData.offers[0] : jsonLdData.offers;
+            if (offer && offer.price) {
+                dados.precoAtual = `R$ ${Number(offer.price).toFixed(2).replace('.', ',')}`;
+            }
+        }
+
+        if (!dados.precoAtual) {
+            const fracaoAtual = $('.ui-pdp-price__main-container .andes-money-amount__fraction').first().text().trim()
+                || $('.andes-money-amount__fraction').first().text().trim();
+            const centavosAtual = $('.ui-pdp-price__main-container .andes-money-amount__cents').first().text().trim()
+                || $('.andes-money-amount__cents').first().text().trim();
+
+            if (fracaoAtual) {
+                dados.precoAtual = centavosAtual ? `R$ ${fracaoAtual},${centavosAtual}` : `R$ ${fracaoAtual}`;
+            }
+        }
+
+        // Porcentagem de desconto
         const textoDesconto = $('.andes-money-amount__discount, [itemprop="discount"]').first().text().trim()
             || $('.ui-pdp-price__discount').text().trim();
         if (textoDesconto) {
@@ -120,24 +162,15 @@ async function buscarDadosProduto(linkAfiliado) {
             if (matchOff) dados.desconto = matchOff[1];
         }
 
-        // Preço Atual (com desconto)
-        const fracaoAtual = $('.ui-pdp-price__main-container .andes-money-amount__fraction').first().text().trim()
-            || $('.andes-money-amount__fraction').first().text().trim();
-        const centavosAtual = $('.ui-pdp-price__main-container .andes-money-amount__cents').first().text().trim()
-            || $('.andes-money-amount__cents').first().text().trim();
+        // Preço Antigo (Riscado) com segurança restrita para evitar números gigantes
+        let fracaoAntiga = $('.andes-money-amount--previous .andes-money-amount__fraction').first().text().trim();
+        let centavosAntiga = $('.andes-money-amount--previous .andes-money-amount__cents').first().text().trim();
 
-        if (fracaoAtual) {
-            dados.precoAtual = centavosAtual ? `R$ ${fracaoAtual},${centavosAtual}` : `R$ ${fracaoAtual}`;
+        if (fracaoAntiga && fracaoAntiga.length < 8) {
+            dados.precoAntigo = centavosAntiga ? `R$ ${fracaoAntiga},${centavosAntiga}` : `R$ ${fracaoAntiga}`;
         }
 
-        // Preço Antigo (cheio / riscado)
-        const fracaoAntiga = $('.andes-money-amount--previous .andes-money-amount__fraction').text().trim();
-        const centavosAntiga = $('.andes-money-amount--previous .andes-money-amount__cents').text().trim();
-        if (fracaoAntiga) {
-            dados.precoAntiga = centavosAntiga ? `R$ ${fracaoAntiga},${centavosAntiga}` : `R$ ${fracaoAntiga}`;
-        }
-
-        // Cupom (busca no texto caso venha informado)
+        // Cupom
         const textoPagina = $('body').text();
         const matchCupom = textoPagina.match(/cupom[:\s]+([A-Z0-9]{4,15})/i);
         if (matchCupom) {
@@ -150,23 +183,23 @@ async function buscarDadosProduto(linkAfiliado) {
     return dados;
 }
 
+// --------- Montagem da Mensagem Estilizada ---------
+
 function montarMensagem(linkAfiliado, dados, legendaManual) {
     const titulo = dados.titulo || legendaManual || 'Oferta imperdível no Mercado Livre!';
 
     let corpo = `⚡ *ALERTA NO QG DAS OFERTAS!* ⚡\n\n`;
     corpo += `🛍️ *${titulo}*\n\n`;
 
-    // Formato de preço estilo o seu print (Ex: De R$ 225,96 por R$ 210,69 ou com o desconto)
     if (dados.precoAtual) {
-        if (dados.precoAntiga) {
+        if (dados.precoAntigo) {
             let infoDesconto = dados.desconto ? ` (${dados.desconto})` : '';
-            corpo += `🔥 De ~~${dados.precoAntiga}~~ por *${dados.precoAtual}*${infoDesconto}\n\n`;
+            corpo += `🔥 De ~~${dados.precoAntigo}~~ por *${dados.precoAtual}*${infoDesconto}\n\n`;
         } else {
-            corpo += `🔥 Por: *${dados.precoAtual}* via Pix\n\n`;
+            corpo += `🔥 Por: *${dados.precoAtual}*\n\n`;
         }
     }
 
-    // Só mostra o cupom se houver um válido
     if (dados.cupom) {
         corpo += `⚠️ Cupom: *${dados.cupom}*\n\n`;
     }
@@ -176,6 +209,8 @@ function montarMensagem(linkAfiliado, dados, legendaManual) {
 
     return corpo;
 }
+
+// --------- Envio para o WhatsApp ---------
 
 async function enviarWhatsApp(mensagem, imagemUrl) {
     if (!conectado) {
