@@ -84,7 +84,9 @@ async function buscarDadosProduto(linkAfiliado) {
     const dados = {
         titulo: null,
         imagem: null,
-        preco: null,
+        precoAtual: null,
+        precoAntigo: null,
+        desconto: null,
         cupom: null
     };
 
@@ -99,6 +101,7 @@ async function buscarDadosProduto(linkAfiliado) {
 
         const $ = cheerio.load(resposta.data);
 
+        // Título
         dados.titulo = $('meta[property="og:title"]').attr('content')
             || $('title').text()
             || null;
@@ -106,27 +109,35 @@ async function buscarDadosProduto(linkAfiliado) {
             dados.titulo = dados.titulo.replace(/\s*\|\s*Mercado Livre.*/i, '').trim();
         }
 
+        // Imagem
         dados.imagem = $('meta[property="og:image"]').attr('content') || null;
 
-        // Preço atualizado: Prioriza as classes visuais de preço promocional do Mercado Livre
-        const fracaoPromocional = $('.ui-pdp-price__second-line .andes-money-amount__fraction').first().text().trim()
-            || $('.andes-money-amount__fraction').first().text().trim();
-        
-        const centavosPromocional = $('.ui-pdp-price__second-line .andes-money-amount__cents').first().text().trim()
-            || $('.andes-money-amount__cents').first().text().trim();
-
-        if (fracaoPromocional) {
-            dados.preco = centavosPromocional ? `R$ ${fracaoPromocional},${centavosPromocional}` : `R$ ${fracaoPromocional}`;
-        } else {
-            // Fallback caso não ache a classe específica de desconto
-            const precoMeta = $('meta[itemprop="price"]').attr('content')
-                || $('meta[property="product:price:amount"]').attr('content');
-            if (precoMeta) {
-                dados.preco = `R$ ${Number(precoMeta).toFixed(2).replace('.', ',')}`;
-            }
+        // Porcentagem de desconto (ex: "6% OFF")
+        const textoDesconto = $('.andes-money-amount__discount, [itemprop="discount"]').first().text().trim()
+            || $('.ui-pdp-price__discount').text().trim();
+        if (textoDesconto) {
+            const matchOff = textoDesconto.match(/(\d+%\s*OFF)/i);
+            if (matchOff) dados.desconto = matchOff[1];
         }
 
-        // Cupom: busca no texto estático da página caso apareça
+        // Preço Atual (com desconto)
+        const fracaoAtual = $('.ui-pdp-price__main-container .andes-money-amount__fraction').first().text().trim()
+            || $('.andes-money-amount__fraction').first().text().trim();
+        const centavosAtual = $('.ui-pdp-price__main-container .andes-money-amount__cents').first().text().trim()
+            || $('.andes-money-amount__cents').first().text().trim();
+
+        if (fracaoAtual) {
+            dados.precoAtual = centavosAtual ? `R$ ${fracaoAtual},${centavosAtual}` : `R$ ${fracaoAtual}`;
+        }
+
+        // Preço Antigo (cheio / riscado)
+        const fracaoAntiga = $('.andes-money-amount--previous .andes-money-amount__fraction').text().trim();
+        const centavosAntiga = $('.andes-money-amount--previous .andes-money-amount__cents').text().trim();
+        if (fracaoAntiga) {
+            dados.precoAntiga = centavosAntiga ? `R$ ${fracaoAntiga},${centavosAntiga}` : `R$ ${fracaoAntiga}`;
+        }
+
+        // Cupom (busca no texto caso venha informado)
         const textoPagina = $('body').text();
         const matchCupom = textoPagina.match(/cupom[:\s]+([A-Z0-9]{4,15})/i);
         if (matchCupom) {
@@ -144,15 +155,24 @@ function montarMensagem(linkAfiliado, dados, legendaManual) {
 
     let corpo = `⚡ *ALERTA NO QG DAS OFERTAS!* ⚡\n\n`;
     corpo += `🛍️ *${titulo}*\n\n`;
-    if (dados.preco) {
-        corpo += `💰 Preço: *${dados.preco}*\n\n`;
-        corpo += `🎟️ Cupom: *${dados.cupom}*\n\n`;
+
+    // Formato de preço estilo o seu print (Ex: De R$ 225,96 por R$ 210,69 ou com o desconto)
+    if (dados.precoAtual) {
+        if (dados.precoAntiga) {
+            let infoDesconto = dados.desconto ? ` (${dados.desconto})` : '';
+            corpo += `🔥 De ~~${dados.precoAntiga}~~ por *${dados.precoAtual}*${infoDesconto}\n\n`;
+        } else {
+            corpo += `🔥 Por: *${dados.precoAtual}* via Pix\n\n`;
+        }
     }
+
+    // Só mostra o cupom se houver um válido
     if (dados.cupom) {
-        corpo += `🎟️ Cupom: *${dados.cupom}*\n\n`;
+        corpo += `⚠️ Cupom: *${dados.cupom}*\n\n`;
     }
+
     corpo += `🔗 Comprar agora:\n${linkAfiliado}\n\n`;
-    corpo += `⚠️ *Atenção:* estoques promocionais costumam acabar rápido!`;
+    corpo += `*Atenção:* estoques promocionais costumam acabar rápido!`;
 
     return corpo;
 }
