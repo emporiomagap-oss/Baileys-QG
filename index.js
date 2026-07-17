@@ -31,7 +31,9 @@ async function conectarAoWhatsApp() {
         version,
         auth: state,
         printQRInTerminal: false,
-        browser: ['Ubuntu', 'Chrome', '20.0.04']
+        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        connectTimeoutMs: 60000, // Aumenta o tempo limite para conexões lentas (60 segundos)
+        markOnlineOnConnect: true
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -53,6 +55,7 @@ async function conectarAoWhatsApp() {
         if (connection === 'close') {
             conectado = false;
             const deveReconectar = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            console.log('Conexão fechada. Reconectando:', deveReconectar);
             if (deveReconectar) {
                 setTimeout(() => conectarAoWhatsApp(), 5000);
             }
