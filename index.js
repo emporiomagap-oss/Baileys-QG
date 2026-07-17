@@ -32,7 +32,7 @@ async function conectarAoWhatsApp() {
         auth: state,
         printQRInTerminal: false,
         browser: ['Ubuntu', 'Chrome', '20.0.04'],
-        connectTimeoutMs: 60000, // Aumenta o tempo limite para conexões lentas (60 segundos)
+        connectTimeoutMs: 60000,
         markOnlineOnConnect: true
     });
 
@@ -55,7 +55,6 @@ async function conectarAoWhatsApp() {
         if (connection === 'close') {
             conectado = false;
             const deveReconectar = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Conexão fechada. Reconectando:', deveReconectar);
             if (deveReconectar) {
                 setTimeout(() => conectarAoWhatsApp(), 5000);
             }
@@ -79,8 +78,11 @@ app.get('/qr', async (req, res) => {
 // --------- Extração do link e busca de dados do produto ---------
 
 function extrairLinkML(texto) {
-    const urls = texto.match(/https?:\/\/[^\s]+/g) || [];
-    return urls.find(url => DOMINIOS_ML.some(dominio => url.includes(dominio))) || null;
+    const urls = texto.match(/https?:\/\\/[^\s]+/g) || [];
+    // Fallback genérico caso a regex venha com barras escapadas do telegram
+    const urlsBrutas = texto.match(/https?:\/\/[^\s]+/g) || [];
+    const todasUrls = [...new Set([...urls, ...urlsBrutas])];
+    return todasUrls.find(url => DOMINIOS_ML.some(dominio => url.includes(dominio))) || null;
 }
 
 async function buscarDadosProduto(linkAfiliado) {
@@ -112,17 +114,28 @@ async function buscarDadosProduto(linkAfiliado) {
         // Imagem
         dados.imagem = $('meta[property="og:image"]').attr('content') || null;
 
-        // Preço Atual Principal
-        const fracaoAtual = $('.ui-pdp-price__main-container .andes-money-amount__fraction').first().text().trim()
-            || $('.andes-money-amount__fraction').first().text().trim();
-        const centavosAtual = $('.ui-pdp-price__main-container .andes-money-amount__cents').first().text().trim()
-            || $('.andes-money-amount__cents').first().text().trim();
+        // Preço Atual Principal (Focando estritamente no container principal da oferta atual)
+        const containerPrecoPrincipal = $('.ui-pdp-price__main-container');
+        
+        let fracaoAtual = containerPrecoPrincipal.find('.andes-money-amount__fraction').first().text().trim();
+        let centavosAtual = containerPrecoPrincipal.find('.andes-money-amount__cents').first().text().trim();
+
+        // Se não achar no container principal, tenta o seletor global ignorando explicitamente blocos de preços anteriores/riscados
+        if (!fracaoAtual) {
+            $('.andes-money-amount').not('.andes-money-amount--previous').not('[itemprop="highPrice"]').each((_, el) => {
+                const f = $(el).find('.andes-money-amount__fraction').text().trim();
+                if (f && !fracaoAtual) {
+                    fracaoAtual = f;
+                    centavosAtual = $(el).find('.andes-money-amount__cents').text().trim();
+                }
+            });
+        }
 
         if (fracaoAtual) {
             dados.precoAtual = centavosAtual ? `R$ ${fracaoAtual},${centavosAtual}` : `R$ ${fracaoAtual}`;
         }
 
-        // Porcentagem de desconto
+        // Porcentagem de desconto (Ex: 35% OFF)
         const textoDesconto = $('.andes-money-amount__discount, [itemprop="discount"]').first().text().trim()
             || $('.ui-pdp-price__discount').text().trim();
         if (textoDesconto) {
