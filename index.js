@@ -8,6 +8,8 @@ const express = require('express');
 const qrcode = require('qrcode');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 app.use(express.json());
@@ -24,7 +26,8 @@ const DOMINIOS_ML = ['mercadolivre.com.br', 'mercadolivre.com', 'mercadolibre.co
 // --------- Conexão com o WhatsApp (Baileys) ---------
 
 async function conectarAoWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    const authFolder = 'auth_info';
+    const { state, saveCreds } = await useMultiFileAuthState(authFolder);
     const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
@@ -54,8 +57,21 @@ async function conectarAoWhatsApp() {
 
         if (connection === 'close') {
             conectado = false;
-            const deveReconectar = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (deveReconectar) {
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const motivoDesconexao = lastDisconnect?.error?.message;
+            console.log(`Conexão fechada. Status: ${statusCode}, Motivo: ${motivoDesconexao}`);
+
+            // Se o dispositivo foi removido ou desconectado por conflito (401), limpa a sessão antiga
+            if (statusCode === DisconnectReason.loggedOut || motivoDesconexao?.includes('device_removed') || statusCode === 401) {
+                console.log('⚠️ Sessão encerrada ou desconectada pelo celular. Limpando credenciais antigas para gerar novo QR Code...');
+                try {
+                    fs.rmSync(authFolder, { recursive: true, force: true });
+                } catch (err) {
+                    console.log('Erro ao limpar pasta de autenticação:', err.message);
+                }
+                setTimeout(() => conectarAoWhatsApp(), 3000);
+            } else {
+                // Outras quedas (ex: instabilidade de rede), apenas reconecta
                 setTimeout(() => conectarAoWhatsApp(), 5000);
             }
         }
@@ -78,11 +94,8 @@ app.get('/qr', async (req, res) => {
 // --------- Extração do link e busca de dados do produto ---------
 
 function extrairLinkML(texto) {
-    const urls = texto.match(/https?:\/\\/[^\s]+/g) || [];
-    // Fallback genérico caso a regex venha com barras escapadas do telegram
-    const urlsBrutas = texto.match(/https?:\/\/[^\s]+/g) || [];
-    const todasUrls = [...new Set([...urls, ...urlsBrutas])];
-    return todasUrls.find(url => DOMINIOS_ML.some(dominio => url.includes(dominio))) || null;
+    const urls = texto.match(/https?:\/\/[^\s]+/g) || [];
+    return urls.find(url => DOMINIOS_ML.some(dominio => url.includes(dominio))) || null;
 }
 
 async function buscarDadosProduto(linkAfiliado) {
@@ -120,7 +133,6 @@ async function buscarDadosProduto(linkAfiliado) {
         let fracaoAtual = containerPrecoPrincipal.find('.andes-money-amount__fraction').first().text().trim();
         let centavosAtual = containerPrecoPrincipal.find('.andes-money-amount__cents').first().text().trim();
 
-        // Se não achar no container principal, tenta o seletor global ignorando explicitamente blocos de preços anteriores/riscados
         if (!fracaoAtual) {
             $('.andes-money-amount').not('.andes-money-amount--previous').not('[itemprop="highPrice"]').each((_, el) => {
                 const f = $(el).find('.andes-money-amount__fraction').text().trim();
@@ -135,7 +147,7 @@ async function buscarDadosProduto(linkAfiliado) {
             dados.precoAtual = centavosAtual ? `R$ ${fracaoAtual},${centavosAtual}` : `R$ ${fracaoAtual}`;
         }
 
-        // Porcentagem de desconto (Ex: 35% OFF)
+        // Porcentagem de desconto
         const textoDesconto = $('.andes-money-amount__discount, [itemprop="discount"]').first().text().trim()
             || $('.ui-pdp-price__discount').text().trim();
         if (textoDesconto) {
