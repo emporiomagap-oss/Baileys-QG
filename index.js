@@ -146,6 +146,7 @@ function montarMensagem(linkAfiliado, dados, legendaManual) {
     corpo += `🛍️ *${titulo}*\n\n`;
     if (dados.preco) {
         corpo += `💰 Preço: *${dados.preco}*\n\n`;
+        corpo += `🎟️ Cupom: *${dados.cupom}*\n\n`;
     }
     if (dados.cupom) {
         corpo += `🎟️ Cupom: *${dados.cupom}*\n\n`;
