@@ -9,7 +9,6 @@ const qrcode = require('qrcode');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const fs = require('fs');
-const path = require('path');
 
 const app = express();
 app.use(express.json());
@@ -23,7 +22,7 @@ let conectado = false;
 
 const DOMINIOS_ML = ['mercadolivre.com.br', 'mercadolivre.com', 'mercadolibre.com', 'meli.la'];
 
-// --------- Conexão com o WhatsApp (Baileys) ---------
+// --------- Conexão com o WhatsApp (Baileys) Estabilizada ---------
 
 async function conectarAoWhatsApp() {
     const authFolder = 'auth_info';
@@ -34,11 +33,16 @@ async function conectarAoWhatsApp() {
         version,
         auth: state,
         printQRInTerminal: false,
-        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        browser: ['QG das Ofertas', 'Chrome', '124.0.0'],
         connectTimeoutMs: 60000,
-        markOnlineOnConnect: true
+        keepAliveIntervalMs: 25000, // Envia um sinal a cada 25 segundos para manter a conexão viva no servidor
+        markOnlineOnConnect: true,
+        generateHighQualityLinkPreview: true,
+        // Evita reprocessar histórico pesado que causa timeout na inicialização
+        syncFullHistory: false
     });
 
+    // Salva as credenciais imediatamente sempre que houver atualização
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
@@ -52,7 +56,7 @@ async function conectarAoWhatsApp() {
         if (connection === 'open') {
             conectado = true;
             qrCodeAtual = null;
-            console.log('🎉 WhatsApp conectado com sucesso!');
+            console.log('🎉 WhatsApp conectado e com sessão estabilizada!');
         }
 
         if (connection === 'close') {
@@ -61,17 +65,16 @@ async function conectarAoWhatsApp() {
             const motivoDesconexao = lastDisconnect?.error?.message;
             console.log(`Conexão fechada. Status: ${statusCode}, Motivo: ${motivoDesconexao}`);
 
-            // Se o dispositivo foi removido ou desconectado por conflito (401), limpa a sessão antiga
+            // Só limpa a sessão se realmente foi desconectado pelo celular (loggedOut ou conflito 401 definitivo)
             if (statusCode === DisconnectReason.loggedOut || motivoDesconexao?.includes('device_removed') || statusCode === 401) {
-                console.log('⚠️ Sessão encerrada ou desconectada pelo celular. Limpando credenciais antigas para gerar novo QR Code...');
+                console.log('⚠️ Sessão revogada pelo aparelho. Limpando credenciais para novo pareamento...');
                 try {
                     fs.rmSync(authFolder, { recursive: true, force: true });
-                } catch (err) {
-                    console.log('Erro ao limpar pasta de autenticação:', err.message);
-                }
+                } catch (err) {}
                 setTimeout(() => conectarAoWhatsApp(), 3000);
             } else {
-                // Outras quedas (ex: instabilidade de rede), apenas reconecta
+                // Para quedas de rede comuns, reconecta mantendo a sessão salva intacta
+                console.log('🔄 Tentando reconectar mantendo a sessão salva...');
                 setTimeout(() => conectarAoWhatsApp(), 5000);
             }
         }
@@ -82,7 +85,7 @@ conectarAoWhatsApp();
 
 app.get('/qr', async (req, res) => {
     if (conectado) {
-        return res.send('<h2>WhatsApp já está conectado! Não precisa escanear nada.</h2>');
+        return res.send('<h2>WhatsApp já está conectado e estável! Não precisa escanear nada.</h2>');
     }
     if (!qrCodeAtual) {
         return res.send('<h2>Aguardando QR code ser gerado... atualize a página em alguns segundos.</h2>');
@@ -127,9 +130,8 @@ async function buscarDadosProduto(linkAfiliado) {
         // Imagem
         dados.imagem = $('meta[property="og:image"]').attr('content') || null;
 
-        // Preço Atual Principal (Focando estritamente no container principal da oferta atual)
+        // Preço Atual Principal
         const containerPrecoPrincipal = $('.ui-pdp-price__main-container');
-        
         let fracaoAtual = containerPrecoPrincipal.find('.andes-money-amount__fraction').first().text().trim();
         let centavosAtual = containerPrecoPrincipal.find('.andes-money-amount__cents').first().text().trim();
 
@@ -223,7 +225,7 @@ app.post('/telegram-webhook', async (req, res) => {
         return res.json({ status: 'nao_autorizado' });
     }
 
-    const texto = mensagemObjeto.text || '';
+    const texto = mensagemObjeto.text || 'O';
     const link = extrairLinkML(texto);
 
     if (link) {
