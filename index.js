@@ -13,7 +13,7 @@ const app = express();
 app.use(express.json());
 
 const TELEGRAM_ALLOWED_CHAT_ID = process.env.TELEGRAM_ALLOWED_CHAT_ID;
-const WHATSAPP_GROUP_ID = process.env.WHATSAPP_GROUP_ID; // formato: numero-numero@g.us
+const WHATSAPP_GROUP_ID = process.env.WHATSAPP_GROUP_ID;
 
 let sock;
 let qrCodeAtual = null;
@@ -73,7 +73,7 @@ app.get('/qr', async (req, res) => {
     res.send(`<div style="text-align:center;padding:40px"><h2>Escaneie com o WhatsApp:</h2><img src="${imagemQR}" /></div>`);
 });
 
-// --------- Extração do link e busca de dados do produto (JSON-LD + Fallback) ---------
+// --------- Extração do link e busca de dados do produto ---------
 
 function extrairLinkML(texto) {
     const urls = texto.match(/https?:\/\/[^\s]+/g) || [];
@@ -85,7 +85,6 @@ async function buscarDadosProduto(linkAfiliado) {
         titulo: null,
         imagem: null,
         precoAtual: null,
-        precoAntigo: null,
         desconto: null,
         cupom: null
     };
@@ -101,57 +100,23 @@ async function buscarDadosProduto(linkAfiliado) {
 
         const $ = cheerio.load(resposta.data);
 
-        // 1. Extração via dados estruturados (JSON-LD)
-        let jsonLdData = null;
-        $('script[type="application/ld+json"]').each((_, element) => {
-            try {
-                const parsed = JSON.parse($(element).html());
-                const produtoSchema = Array.isArray(parsed) 
-                    ? parsed.find(item => item['@type'] === 'Product') 
-                    : (parsed['@type'] === 'Product' ? parsed : null);
-
-                if (produtoSchema) {
-                    jsonLdData = produtoSchema;
-                }
-            } catch (err) {
-                // Ignora JSONs mal formados
-            }
-        });
-
         // Título
-        if (jsonLdData && jsonLdData.name) {
-            dados.titulo = jsonLdData.name;
-        } else {
-            dados.titulo = $('meta[property="og:title"]').attr('content') || $('title').text() || null;
-            if (dados.titulo) {
-                dados.titulo = dados.titulo.replace(/\s*\|\s*Mercado Livre.*/i, '').trim();
-            }
+        dados.titulo = $('meta[property="og:title"]').attr('content') || $('title').text() || null;
+        if (dados.titulo) {
+            dados.titulo = dados.titulo.replace(/\s*\|\s*Mercado Livre.*/i, '').trim();
         }
 
         // Imagem
-        if (jsonLdData && jsonLdData.image) {
-            dados.imagem = Array.isArray(jsonLdData.image) ? jsonLdData.image[0] : jsonLdData.image;
-        } else {
-            dados.imagem = $('meta[property="og:image"]').attr('content') || null;
-        }
+        dados.imagem = $('meta[property="og:image"]').attr('content') || null;
 
-        // Preço Atual
-        if (jsonLdData && jsonLdData.offers) {
-            const offer = Array.isArray(jsonLdData.offers) ? jsonLdData.offers[0] : jsonLdData.offers;
-            if (offer && offer.price) {
-                dados.precoAtual = `R$ ${Number(offer.price).toFixed(2).replace('.', ',')}`;
-            }
-        }
+        // Preço Atual Principal
+        const fracaoAtual = $('.ui-pdp-price__main-container .andes-money-amount__fraction').first().text().trim()
+            || $('.andes-money-amount__fraction').first().text().trim();
+        const centavosAtual = $('.ui-pdp-price__main-container .andes-money-amount__cents').first().text().trim()
+            || $('.andes-money-amount__cents').first().text().trim();
 
-        if (!dados.precoAtual) {
-            const fracaoAtual = $('.ui-pdp-price__main-container .andes-money-amount__fraction').first().text().trim()
-                || $('.andes-money-amount__fraction').first().text().trim();
-            const centavosAtual = $('.ui-pdp-price__main-container .andes-money-amount__cents').first().text().trim()
-                || $('.andes-money-amount__cents').first().text().trim();
-
-            if (fracaoAtual) {
-                dados.precoAtual = centavosAtual ? `R$ ${fracaoAtual},${centavosAtual}` : `R$ ${fracaoAtual}`;
-            }
+        if (fracaoAtual) {
+            dados.precoAtual = centavosAtual ? `R$ ${fracaoAtual},${centavosAtual}` : `R$ ${fracaoAtual}`;
         }
 
         // Porcentagem de desconto
@@ -160,14 +125,6 @@ async function buscarDadosProduto(linkAfiliado) {
         if (textoDesconto) {
             const matchOff = textoDesconto.match(/(\d+%\s*OFF)/i);
             if (matchOff) dados.desconto = matchOff[1];
-        }
-
-        // Preço Antigo (Riscado) com segurança restrita para evitar números gigantes
-        let fracaoAntiga = $('.andes-money-amount--previous .andes-money-amount__fraction').first().text().trim();
-        let centavosAntiga = $('.andes-money-amount--previous .andes-money-amount__cents').first().text().trim();
-
-        if (fracaoAntiga && fracaoAntiga.length < 8) {
-            dados.precoAntigo = centavosAntiga ? `R$ ${fracaoAntiga},${centavosAntiga}` : `R$ ${fracaoAntiga}`;
         }
 
         // Cupom
@@ -192,16 +149,9 @@ function montarMensagem(linkAfiliado, dados, legendaManual) {
     corpo += `🛍️ *${titulo}*\n\n`;
 
     if (dados.precoAtual) {
-        if (dados.precoAntigo) {
-            let infoDesconto = dados.desconto ? ` (${dados.desconto})` : '';
-            corpo += `🔥 De ~~${dados.precoAntigo}~~ por *${dados.precoAtual}*${infoDesconto}\n\n`;
-        } else {
-            corpo += `🔥 Por: *${dados.precoAtual}*\n\n`;
-        }
-    }
-
-    if (dados.cupom) {
-        corpo += `⚠️ Cupom: *${dados.cupom}*\n\n`;
+        let infoDesconto = dados.desconto ? ` (${dados.desconto})` : '';
+        let infoCupom = dados.cupom ? ` | Cupom: *${dados.cupom}*` : '';
+        corpo += `🔥 Por: *${dados.precoAtual}*${infoDesconto}${infoCupom}\n\n`;
     }
 
     corpo += `🔗 Comprar agora:\n${linkAfiliado}\n\n`;
