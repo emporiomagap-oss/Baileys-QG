@@ -89,8 +89,6 @@ async function buscarDadosProduto(linkAfiliado) {
     };
 
     try {
-        // Segue o redirecionamento só para ENXERGAR a página do produto — o link enviado
-        // na mensagem continua sendo o seu link de afiliado original, intacto.
         const resposta = await axios.get(linkAfiliado, {
             maxRedirects: 5,
             timeout: 10000,
@@ -110,19 +108,25 @@ async function buscarDadosProduto(linkAfiliado) {
 
         dados.imagem = $('meta[property="og:image"]').attr('content') || null;
 
-        // Preço: tenta os formatos mais comuns nas páginas do Mercado Livre
-        const precoMeta = $('meta[itemprop="price"]').attr('content')
-            || $('meta[property="product:price:amount"]').attr('content');
-        if (precoMeta) {
-            dados.preco = `R$ ${Number(precoMeta).toFixed(2).replace('.', ',')}`;
+        // Preço atualizado: Prioriza as classes visuais de preço promocional do Mercado Livre
+        const fracaoPromocional = $('.ui-pdp-price__second-line .andes-money-amount__fraction').first().text().trim()
+            || $('.andes-money-amount__fraction').first().text().trim();
+        
+        const centavosPromocional = $('.ui-pdp-price__second-line .andes-money-amount__cents').first().text().trim()
+            || $('.andes-money-amount__cents').first().text().trim();
+
+        if (fracaoPromocional) {
+            dados.preco = centavosPromocional ? `R$ ${fracaoPromocional},${centavosPromocional}` : `R$ ${fracaoPromocional}`;
         } else {
-            const precoFracao = $('.andes-money-amount__fraction').first().text();
-            if (precoFracao) {
-                dados.preco = `R$ ${precoFracao}`;
+            // Fallback caso não ache a classe específica de desconto
+            const precoMeta = $('meta[itemprop="price"]').attr('content')
+                || $('meta[property="product:price:amount"]').attr('content');
+            if (precoMeta) {
+                dados.preco = `R$ ${Number(precoMeta).toFixed(2).replace('.', ',')}`;
             }
         }
 
-        // Cupom: nem sempre vem no HTML estático (às vezes só carrega via JS na página real)
+        // Cupom: busca no texto estático da página caso apareça
         const textoPagina = $('body').text();
         const matchCupom = textoPagina.match(/cupom[:\s]+([A-Z0-9]{4,15})/i);
         if (matchCupom) {
